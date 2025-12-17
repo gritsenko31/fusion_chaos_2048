@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Fusion Chaos v1.4</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<style>
+:root{
+  --bg:#1e1e1e; --panel:#2b2b2b; --grid:#3a3a3a; --cell:#555; --text:#fff;
+  --light-bg:#f0f0f0; --light-cell:#ddd; --light-text:#000;
+  --neon-bg:#000; --neon-grid:#111; --neon-cell:#222; --neon-text:#0ff;
+}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:system-ui,sans-serif; display:flex; justify-content:center; align-items:center; height:100vh; overscroll-behavior:none;
+}
+.game{
+  background:var(--panel); padding:16px; border-radius:18px; width:340px; position:relative;
+}
+h1{text-align:center;margin:4px 0;}
+.stats{display:flex;justify-content:space-between;font-size:14px;margin-bottom:8px;}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;background:var(--grid);padding:8px;border-radius:14px;touch-action:none;position:relative;}
+.cell{width:70px;height:70px;border-radius:14px;display:flex;justify-content:center;align-items:center;font-size:24px;font-weight:bold;background:var(--cell);animation:pop .15s ease;}
+@keyframes pop{from{transform:scale(.8);opacity:.5}to{transform:scale(1);opacity:1}}
+.n2{background:#eee;color:#000} .n4{background:#ddd;color:#000} .n8{background:#f2b179}
+.n16{background:#f59563} .n32{background:#f67c5f} .n64{background:#f65e3b} .n128{background:#edcf72;color:#000}
+.n256{background:#edcc61;color:#000} .n512{background:#edc850} .n1024{background:#edc53f} .n2048{background:#edc22e}
+.bomb{background:#b00020} .magnet{background:#1565c0} .mutator{background:#6a1b9a} .portal{background:#800080}
+button{margin-top:10px;width:100%;padding:10px;border:none;border-radius:12px;background:#ff9800;font-size:16px;cursor:pointer;}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);display:none;justify-content:center;align-items:center;}
+.overlay.active{display:flex}
+.dialog{background:#2b2b2b;padding:20px;border-radius:16px;text-align:center;width:260px;}
+.footer{text-align:center;font-size:11px;opacity:.6;margin-top:6px;}
+.theme-btn{margin-top:6px;width:100%;padding:6px;font-size:14px;background:#009688;color:#fff;border-radius:10px;border:none;cursor:pointer;}
+#rulesOverlay p{font-size:16px;line-height:1.4;}
+
+/* ===== Particles ===== */
+.particle {
+  position: absolute; width:6px; height:6px; border-radius:50%;
+  pointer-events:none; animation:particleAnim 0.6s forwards;
+}
+@keyframes particleAnim {
+  0% {transform: translate(0,0) scale(1); opacity:1;}
+  100% {transform: translate(var(--dx), var(--dy)) scale(0); opacity:0;}
+}
+</style>
+</head>
+<body>
+
+<div class="game" id="game">
+  <h1>Fusion Chaos</h1>
+  <div class="stats">
+    <div>Score: <span id="score">0</span></div>
+    <div>Best: <span id="best">0</span></div>
+  </div>
+  <div class="grid" id="grid"></div>
+  <button onclick="init()">Restart</button>
+  <button class="theme-btn" onclick="changeTheme()">Change Theme</button>
+  <button class="theme-btn" onclick="showHighscore()">Top Scores</button>
+  <button class="theme-btn" onclick="showRules()">Rules</button>
+  <div class="footer">Created with Vibe Code Games</div>
+</div>
+
+<!-- Game Over / Win / Tutorial Overlay -->
+<div class="overlay" id="overlay">
+  <div class="dialog" id="dialogContent">
+    <h2 id="overlayTitle"></h2>
+    <div id="tutorial" style="margin:10px 0;"></div>
+    <button onclick="closeOverlay()">Continue</button>
+    <button onclick="init()">Restart</button>
+  </div>
+</div>
+
+<!-- Highscore Overlay -->
+<div class="overlay" id="highscoreOverlay">
+  <div class="dialog">
+    <h2>Top 5 Scores</h2>
+    <ol id="highscoreList"></ol>
+    <button onclick="closeHighscore()">Close</button>
+  </div>
+</div>
+
+<!-- Rules Overlay -->
+<div class="overlay" id="rulesOverlay">
+  <div class="dialog">
+    <h2>How to Play</h2>
+    <p>
+      <b>Numbers:</b> Combine same numbers to double.<br>
+      <b>💣 Bomb:</b> Explodes and clears tiles around.<br>
+      <b>🧲 Magnet:</b> Pulls nearby numbers and doubles them.<br>
+      <b>🧪 Mutator:</b> Randomly changes a number or tile type.<br>
+      <b>🌀 Portal:</b> Swaps two random tiles.<br><br>
+      Swipe or use arrow keys to move tiles.<br>
+      Combine, survive, and get the highest score!
+    </p>
+    <button onclick="closeRules()">Close</button>
+  </div>
+</div>
+
+<script>
+// ====== Variables ======
+const size=4;
+let grid=[],score=0,best=localStorage.fcBest||0,won=false,theme='dark',tutorialShown=localStorage.fcTutorial;
+let topScores = JSON.parse(localStorage.fcTopScores||"[]");
+const gridEl=document.getElementById("grid");
+const scoreEl=document.getElementById("score");
+const bestEl=document.getElementById("best");
+
+// ====== Init ======
+function init(){
+  grid=[...Array(size)].map(()=>Array(size).fill(null));
+  score=0; won=false;
+  addTile(); addTile();
+  draw();
+  hideOverlay();
+  if(!tutorialShown) showTutorial();
+}
+
+// ====== Tiles ======
+function randomTile(){
+  const r=Math.random();
+  if(r<0.65) return {t:"n",v:Math.random()<0.9?2:4};
+  if(r<0.75) return {t:"b"};
+  if(r<0.85) return {t:"m"};
+  if(r<0.95) return {t:"u"};
+  return {t:"p"};
+}
+function addTile(){
+  const empty=[];
+  grid.forEach((r,y)=>r.forEach((c,x)=>!c&&empty.push({x,y})));
+  if(!empty.length) return;
+  const p=empty[Math.floor(Math.random()*empty.length)];
+  grid[p.y][p.x]=randomTile();
+}
+
+// ====== Draw ======
+function draw(){
+  gridEl.innerHTML="";
+  scoreEl.textContent=score;
+  bestEl.textContent=best;
+  grid.flat().forEach(c=>{
+    const d=document.createElement("div"); d.className="cell";
+    if(c){
+      if(c.t==="n"){d.textContent=c.v; d.classList.add("n"+c.v);}
+      if(c.t==="b"){d.textContent="💣"; d.classList.add("bomb");}
+      if(c.t==="m"){d.textContent="🧲"; d.classList.add("magnet");}
+      if(c.t==="u"){d.textContent="🧪"; d.classList.add("mutator");}
+      if(c.t==="p"){d.textContent="🌀"; d.classList.add("portal");}
+    }
+    gridEl.appendChild(d);
+  });
+}
+
+// ====== Particles ======
+function createParticles(x, y, color="#ff0", count=10){
+  for(let i=0;i<count;i++){
+    const p=document.createElement("div");
+    p.className="particle";
+    p.style.background=color;
+    const dx=(Math.random()-0.5)*60+"px";
+    const dy=(Math.random()-0.5)*60+"px";
+    p.style.setProperty('--dx', dx);
+    p.style.setProperty('--dy', dy);
+    p.style.left=(x*78+8)+"px";
+    p.style.top=(y*78+8)+"px";
+    gridEl.appendChild(p);
+    setTimeout(()=>p.remove(),600);
+  }
+}
+
+// ====== Slide & Merge ======
+function slide(row, rowIndex, isVertical=false){
+  let a=row.filter(Boolean);
+  for(let i=0;i<a.length-1;i++){
+    let x=a[i],y=a[i+1];
+    const coordX = isVertical?rowIndex:(i);
+    const coordY = isVertical?(i):rowIndex;
+    if(x.t==="n"&&y.t==="n"&&x.v===y.v){
+      x.v*=2; score+=x.v; a.splice(i+1,1);
+      createParticles(coordX, coordY, "#ff0", 12);
+      if(x.v===2048&&!won){showOverlay("You Win! 🎉"); won=true;}
+    } else if(y.t==="b"){ explode(); a.splice(i+1,1);}
+    else if(y.t==="u"&&x.t==="n"){ mutate(x); a.splice(i+1,1);}
+    else if(y.t==="p"){ portal(); a.splice(i+1,1);}
+  }
+  while(a.length<size) a.push(null);
+  return a;
+}
+
+function mutate(t){const r=Math.floor(Math.random()*4); if(r===0)t.v*=2; if(r===1)t.v=Math.max(2,t.v/2); if(r===2){t.t="b"; delete t.v;} if(r===3){t.t="m"; delete t.v; }}
+
+// ====== Special Tiles ======
+function explode(){
+  for(let y=0;y<size;y++){
+    for(let x=0;x<size;x++){
+      if(grid[y][x]){
+        createParticles(x, y, "#f00", 15);
+        grid[y][x]=null; score+=5;
+      }
+    }
+  }
+}
+function applyMagnets(){grid.forEach((r,y)=>r.forEach((c,x)=>{if(c?.t==="m"){[[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dy])=>{const n=grid[y+dy]?.[x+dx]; if(n?.t==="n"){n.v*=2; score+=n.v; createParticles(x+dx,y+dy,"#0f0",8);}}); grid[y][x]=null;}}));}
+function portal(){
+  let empty=[]; for(let y=0;y<size;y++)for(let x=0;x<size;x++)if(grid[y][x]) empty.push({x,y});
+  if(empty.length>=2){
+    let a=empty[Math.floor(Math.random()*empty.length)];
+    let b=empty[Math.floor(Math.random()*empty.length)];
+    while(a.x===b.x && a.y===b.y) b=empty[Math.floor(Math.random()*empty.length)];
+    let temp=grid[a.y][a.x]; grid[a.y][a.x]=grid[b.y][b.x]; grid[b.y][b.x]=temp;
+    createParticles(a.x,a.y,"#0ff",8); createParticles(b.x,b.y,"#0ff",8);
+  }
+}
+
+// ====== Move ======
+function move(dx,dy){
+  let moved=false;
+  for(let i=0;i<size;i++){
+    let r=[];
+    for(let j=0;j<size;j++){
+      const x=dx?(dx>0?size-1-j:j):i;
+      const y=dy?(dy>0?size-1-j:j):i;
+      r.push(grid[y][x]);
+    }
+    const n=slide(r,i,dx===0);
+    for(let j=0;j<size;j++){
+      const x=dx?(dx>0?size-1-j:j):i;
+      const y=dy?(dy>0?size-1-j:j):i;
+      if(grid[y][x]!==n[j]) moved=true;
+      grid[y][x]=n[j];
+    }
+  }
+  if(moved){addTile(); applyMagnets(); if(score>best){best=score; localStorage.fcBest=best;} draw(); if(isGameOver()) showOverlay("Game Over");}
+}
+function isGameOver(){for(let y=0;y<size;y++)for(let x=0;x<size;x++){const c=grid[y][x];if(!c)return false;if(c.t==="n"){if(grid[y+1]?.[x]?.v===c.v)return false;if(grid[y]?.[x+1]?.v===c.v)return false;}}return true;}
+
+// ====== Input ======
+document.addEventListener("keydown",e=>{if(e.key==="ArrowLeft")move(-1,0);if(e.key==="ArrowRight")move(1,0);if(e.key==="ArrowUp")move(0,-1);if(e.key==="ArrowDown")move(0,1);});
+let sx,sy;
+gridEl.addEventListener("touchstart",e=>{sx=e.touches[0].clientX; sy=e.touches[0].clientY;});
+gridEl.addEventListener("touchend",e=>{const dx=e.changedTouches[0].clientX-sx,dy=e.changedTouches[0].clientY-sy;if(Math.abs(dx)>Math.abs(dy)){if(dx>30)move(1,0);if(dx<-30)move(-1,0);}else{if(dy>30)move(0,1);if(dy<-30)move(0,-1);}});
+
+// ====== Overlay ======
+function showOverlay(t){checkHighscore(); document.getElementById("overlayTitle").textContent=t; document.getElementById("overlay").classList.add("active");}
+function hideOverlay(){document.getElementById("overlay").classList.remove("active");}
+function closeOverlay(){hideOverlay();}
+
+// ====== Tutorial ======
+function showTutorial(){document.getElementById("tutorial").innerHTML="<b>Tiles:</b><br>💣 Bomb: Explodes<br>🧲 Magnet: Pulls numbers<br>🧪 Mutator: Random change<br>🌀 Portal: Swap tiles"; showOverlay("Tutorial"); tutorialShown=true; localStorage.fcTutorial=1;}
+
+// ====== Theme ======
+function changeTheme(){
+  if(theme==='dark'){document.body.style.background='var(--light-bg)';document.body.style.color='var(--light-text)';theme='light';}
+  else if(theme==='light'){document.body.style.background='var(--neon-bg)';document.body.style.color='var(--neon-text)';theme='neon';}
+  else{document.body.style.background='var(--bg)';document.body.style.color='var(--text)';theme='dark';}
+}
+
+// ====== Highscore logic ======
+function updateHighscore(currentScore){const date=new Date();const entry={score:currentScore,date:`${date.getDate()}.${date.getMonth()+1}.${date.getFullYear()}`};topScores.push(entry);topScores.sort((a,b)=>b.score-a.score);if(topScores.length>5) topScores.length=5; localStorage.fcTopScores=JSON.stringify(topScores);}
+function showHighscore(){const listEl=document.getElementById("highscoreList"); listEl.innerHTML=""; topScores.forEach(e=>{const li=document.createElement("li"); li.textContent=`${e.score} — ${e.date}`; listEl.appendChild(li);}); document.getElementById("highscoreOverlay").classList.add("active");}
+function closeHighscore(){document.getElementById("highscoreOverlay").classList.remove("active");}
+function checkHighscore(){if(score>0) updateHighscore(score);}
+
+// ====== Rules Overlay ======
+function showRules(){document.getElementById("rulesOverlay").classList.add("active");}
+function closeRules(){document.getElementById("rulesOverlay").classList.remove("active");}
+
+init();
+</script>
+</body>
+</html>
